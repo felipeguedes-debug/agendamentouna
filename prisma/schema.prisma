@@ -1,0 +1,1237 @@
+// Block 1 schema. Product rules: docs/PRD.md; decisions: docs/decisoes.md.
+// Practice isolation (D-02, D-30): every practice-scoped model has `practiceId`,
+// `@@unique([id, practiceId])`, and references other practice-scoped models through
+// composite foreign keys `[xId, practiceId]`, so the database itself rejects a row
+// that points into another practice. The guard test in
+// src/lib/db/practice-scope.test.ts fails if a new model breaks this pattern.
+// Columns named `...UserId` without a relation store the acting user's id; users are
+// revoked, never deleted.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum OrganizationRole {
+  ADMIN
+}
+
+enum Role {
+  PRACTICE_MANAGER
+  SECRETARY
+  PROFESSIONAL
+}
+
+enum AppointmentCategory {
+  CONSULTATION
+  FOLLOW_UP
+  PROCEDURE
+  EXAM
+  TELECONSULTATION
+  BLOCK
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  ARRIVED
+  IN_PROGRESS
+  COMPLETED
+  NO_SHOW
+  CANCELED_BY_PATIENT
+  CANCELED_BY_PRACTICE
+  RESCHEDULED
+}
+
+enum StatusChangeSource {
+  USER
+  CADENCE_REPLY
+  GOOGLE
+  CRM
+  IMPORT
+  SYSTEM
+}
+
+enum AppointmentFlagType {
+  RESCHEDULE_REQUESTED
+  REPLIED_WITHOUT_CONFIRMING
+  NO_CONFIRMATION
+  MANUAL_CONTACT
+}
+
+enum LeadSource {
+  INSTAGRAM
+  REFERRAL
+  WEBSITE
+  OTHER
+}
+
+enum ConsentChannel {
+  IN_PERSON
+  PHONE
+  WHATSAPP
+  FORM
+  IMPORT
+}
+
+enum TimeBlockSource {
+  MANUAL
+  GOOGLE
+}
+
+enum CadenceAnchor {
+  BOOKING
+  APPOINTMENT
+}
+
+enum CadenceStepAction {
+  REQUEST_CONFIRMATION
+  REMINDER
+}
+
+enum DispatchStatus {
+  SCHEDULED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  SKIPPED
+  CANCELED
+}
+
+enum WhatsappInstanceStatus {
+  PENDING_QR
+  CONNECTED
+  DISCONNECTED
+}
+
+enum GoogleConnectionStatus {
+  ACTIVE
+  REVOKED
+  ERROR
+}
+
+enum PendingGoogleChangeKind {
+  MOVED
+  DELETED
+}
+
+enum PendingGoogleChangeResolution {
+  ACCEPTED
+  REVERTED
+  // The appointment changed in the system, or the event went back to its time,
+  // before anyone resolved it (D-63).
+  SUPERSEDED
+}
+
+enum CrmAccountStatus {
+  ACTIVE
+  // FlwChat refused the token; the marks wait for a new one (D-68).
+  REVOKED
+}
+
+enum AuditActorType {
+  USER
+  SYSTEM
+  PATIENT
+  GOOGLE
+  CRM
+}
+
+// ---------------------------------------------------------------------------
+// Cross-practice models (not reachable through the practice-scoped client)
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  practices Practice[]
+  members   OrganizationMember[]
+}
+
+model OrganizationMember {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  userId         String           @db.Uuid
+  role           OrganizationRole @default(ADMIN)
+  createdAt      DateTime         @default(now()) @db.Timestamptz(3)
+  revokedAt      DateTime?        @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@unique([organizationId, userId])
+}
+
+// Field names follow Better Auth's user model (D-34); twoFactorEnabled belongs to
+// its two-factor plugin. Terms are accepted on the first access (PRD 3, req. 3).
+model User {
+  id               String    @id @default(uuid()) @db.Uuid
+  name             String
+  email            String    @unique
+  emailVerified    Boolean   @default(false)
+  image            String?
+  twoFactorEnabled Boolean   @default(false)
+  termsAcceptedAt  DateTime? @db.Timestamptz(3)
+  termsVersion     String?
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(3)
+
+  organizationMemberships OrganizationMember[]
+  memberships             Membership[]
+  professionals           Professional[]
+  googleConnections       GoogleConnection[]
+  sessions                Session[]
+  accounts                Account[]
+  twoFactors              TwoFactor[]
+  pushSubscriptions       PushSubscription[]
+}
+
+// ---------------------------------------------------------------------------
+// Better Auth (Block 2, D-35). Cross-practice: a login is not tied to a practice.
+// ---------------------------------------------------------------------------
+
+model Session {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @db.Uuid
+  token            String   @unique
+  expiresAt        DateTime @db.Timestamptz(3)
+  ipAddress        String?
+  userAgent        String?
+  // Remembered device of the PWA (D-17): 30 days of inactivity instead of 12 h.
+  rememberedDevice Boolean  @default(false)
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(3)
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pushSubscriptions PushSubscription[]
+
+  @@index([userId])
+}
+
+// Web Push of one device, turned on by its user (PRD 7). Cross-practice, like the
+// session it hangs from: the same person gets the notices of every practice, and
+// signing out or revoking the session ends the subscription with it. The endpoint
+// and the keys let anyone send to the device, so they are kept encrypted.
+model PushSubscription {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid
+  sessionId     String   @db.Uuid
+  endpointHash  String   @unique
+  keysEncrypted String
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([sessionId])
+}
+
+// What the sandbox push provider "delivered" outside production (PRD 12).
+model SandboxPushMessage {
+  id           String   @id @default(uuid()) @db.Uuid
+  endpointHash String
+  title        String
+  body         String
+  url          String
+  tag          String
+  ttlSeconds   Int
+  sentAt       DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([endpointHash])
+}
+
+// A way to sign in: "credential" (password hash) or an identity provider such as
+// Google. Not the PRD's "conta", which is Practice (D-29). Google tokens are not
+// kept here (D-35); the calendar grant lives in GoogleConnection (D-01).
+model Account {
+  id                    String    @id @default(uuid()) @db.Uuid
+  userId                String    @db.Uuid
+  // The user id for "credential"; the provider's subject otherwise.
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime? @db.Timestamptz(3)
+  refreshTokenExpiresAt DateTime? @db.Timestamptz(3)
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+// Short-lived values: OAuth state, pending second-factor challenges, trusted devices.
+model Verification {
+  id         String   @id @default(uuid()) @db.Uuid
+  identifier String
+  value      String
+  expiresAt  DateTime @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([identifier])
+}
+
+// Better Auth's attempt counter, by address and path (D-96). In the database because a
+// serverless instance's memory dies with it; Better Auth removes what is long past.
+model RateLimit {
+  id          String @id @default(uuid()) @db.Uuid
+  key         String @unique
+  count       Int
+  lastRequest BigInt
+}
+
+// Authenticator app secret and backup codes, both encrypted by Better Auth (D-36).
+model TwoFactor {
+  id                      String    @id @default(uuid()) @db.Uuid
+  userId                  String    @db.Uuid
+  secret                  String
+  backupCodes             String
+  verified                Boolean   @default(true)
+  failedVerificationCount Int       @default(0)
+  lockedUntil             DateTime? @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([secret])
+}
+
+// One Google account authorized for calendar access (D-01). Shared by the
+// Professional rows of the same person across practices (D-04). Tokens are stored
+// encrypted only (encryptSecret); the access token is a cache of the last refresh.
+model GoogleConnection {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  userId                String?                @db.Uuid
+  googleSubject         String                 @unique
+  email                 String
+  refreshTokenEncrypted String
+  accessTokenEncrypted  String?
+  accessTokenExpiresAt  DateTime?              @db.Timestamptz(3)
+  scopes                String[]
+  // REVOKED: Google refused the refresh token; the agenda goes on without Google (PRD 5, rule 6).
+  status                GoogleConnectionStatus @default(ACTIVE)
+  statusChangedAt       DateTime               @default(now()) @db.Timestamptz(3)
+  lastError             String?
+  lastSyncAt            DateTime?              @db.Timestamptz(3)
+  createdAt             DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime               @updatedAt @db.Timestamptz(3)
+
+  user               User?                     @relation(fields: [userId], references: [id])
+  professionals      Professional[]
+  secondaryCalendars GoogleSecondaryCalendar[]
+  calendars          GoogleCalendar[]
+}
+
+// The connection's calendar list (for the busy choice) and the sync state of the
+// calendars the system reads: the last read and the push channel (D-61).
+model GoogleCalendar {
+  id                 String    @id @default(uuid()) @db.Uuid
+  googleConnectionId String    @db.Uuid
+  googleCalendarId   String
+  summary            String
+  // owner, writer, reader or freeBusyReader, as Google lists it.
+  accessRole         String
+  primary            Boolean   @default(false)
+  lastSyncedAt       DateTime? @db.Timestamptz(3)
+  channelId          String?   @unique
+  channelResourceId  String?
+  // SHA-256 of the channel token Google echoes in X-Goog-Channel-Token.
+  channelTokenHash   String?
+  channelExpiresAt   DateTime? @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @db.Timestamptz(3)
+
+  googleConnection GoogleConnection @relation(fields: [googleConnectionId], references: [id], onDelete: Cascade)
+
+  @@unique([googleConnectionId, googleCalendarId])
+}
+
+// The fake Google of the sandbox provider (D-58): calendars and events of fake
+// Google accounts, so the sync runs end to end without Google. Never used in
+// production. The data subject's erasure rewrites the titles here as in Google.
+model SandboxGoogleCalendar {
+  id             String   @id @default(uuid()) @db.Uuid
+  accountSubject String
+  calendarId     String   @unique
+  summary        String
+  accessRole     String   @default("owner")
+  primary        Boolean  @default(false)
+  timeZone       String   @default("America/Fortaleza")
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  events SandboxGoogleEvent[]
+
+  @@index([accountSubject])
+}
+
+model SandboxGoogleEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  calendarId    String
+  eventId       String
+  // confirmed, tentative or cancelled, as in Google.
+  status        String    @default("confirmed")
+  summary       String?
+  description   String?
+  location      String?
+  // Timed events use startsAt/endsAt; all-day ones startDate/endDate ("YYYY-MM-DD", end exclusive).
+  startsAt      DateTime? @db.Timestamptz(3)
+  endsAt        DateTime? @db.Timestamptz(3)
+  startDate     String?
+  endDate       String?
+  transparency  String    @default("opaque")
+  eventType     String    @default("default")
+  declined      Boolean   @default(false)
+  appointmentId String?
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
+
+  calendar SandboxGoogleCalendar @relation(fields: [calendarId], references: [calendarId], onDelete: Cascade)
+
+  @@unique([calendarId, eventId])
+}
+
+// A FlwChat account (D-73): the token, the webhook and its status. One account may
+// serve several practices, as a Google connection does (D-04), so it belongs to none.
+// The token only encrypted; only the SHA-256 of the webhook URL's secret, as in
+// Invitation (D-38), since FlwChat's subscription has no signature (D-67).
+model CrmAccount {
+  id                String           @id @default(uuid()) @db.Uuid
+  companyId         String?          @unique
+  tokenEncrypted    String
+  status            CrmAccountStatus @default(ACTIVE)
+  statusChangedAt   DateTime         @default(now()) @db.Timestamptz(3)
+  lastError         String?
+  subscriptionId    String?
+  webhookSecretHash String?          @unique
+  createdAt         DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime         @updatedAt @db.Timestamptz(3)
+
+  connections CrmConnection[]
+}
+
+// The sandbox provider's fake SynkronosCRM (src/lib/crm/sandbox.ts): one fake account
+// per key, taken from the token, so two practices with the same token share it.
+// Not used in production.
+model SandboxCrmContact {
+  id                  String   @id @default(uuid()) @db.Uuid
+  accountKey          String
+  name                String?
+  phone               String?
+  tagNames            String[] @default([])
+  // A contact that never talked has no conversation to take a note (D-68). The
+  // numbers it talked to; empty means any, for tests that do not care.
+  hasConversation     Boolean  @default(true)
+  conversationNumbers String[] @default([])
+  createdAt           DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime @updatedAt @db.Timestamptz(3)
+
+  notes SandboxCrmNote[]
+
+  @@unique([accountKey, phone])
+}
+
+model SandboxCrmNote {
+  id            String   @id @default(uuid()) @db.Uuid
+  contactId     String   @db.Uuid
+  channelNumber String?
+  text          String
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  contact SandboxCrmContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId])
+}
+
+model SandboxCrmSubscription {
+  id         String   @id @default(uuid()) @db.Uuid
+  accountKey String
+  url        String
+  events     String[]
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([accountKey])
+}
+
+// ---------------------------------------------------------------------------
+// Practice ("Conta" in the PRD)
+// ---------------------------------------------------------------------------
+
+model Practice {
+  id                String   @id @default(uuid()) @db.Uuid
+  organizationId    String   @db.Uuid
+  name              String
+  // Cadence send window (D-07), read in each location's time zone. Days: 0 = Sunday.
+  sendWindowStart   String   @default("08:00")
+  sendWindowEnd     String   @default("20:00")
+  sendWindowDays    Int[]    @default([1, 2, 3, 4, 5, 6])
+  sendMarginMinutes Int      @default(120)
+  requireTwoFactor  Boolean  @default(false)
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  memberships              Membership[]
+  invitations              Invitation[]
+  locations                Location[]
+  professionals            Professional[]
+  professionalLocations    ProfessionalLocation[]
+  workingHours             WorkingHours[]
+  scheduleExceptions       ScheduleException[]
+  timeBlocks               TimeBlock[]
+  patients                 Patient[]
+  contactConsents          ContactConsent[]
+  appointmentTypes         AppointmentType[]
+  appointmentTypePrices    AppointmentTypePrice[]
+  appointments             Appointment[]
+  appointmentStatusChanges AppointmentStatusChange[]
+  appointmentFlags         AppointmentFlag[]
+  cadences                 Cadence[]
+  cadenceSteps             CadenceStep[]
+  cadenceProfessionals     CadenceProfessional[]
+  dispatches               Dispatch[]
+  whatsappInstances        WhatsappInstance[]
+  sandboxMessages          SandboxMessage[]
+  googleSecondaryCalendars GoogleSecondaryCalendar[]
+  googleLinkRequests       GoogleLinkRequest[]
+  pendingGoogleChanges     PendingGoogleChange[]
+  crmConnection            CrmConnection?
+  crmInboundEvents         CrmInboundEvent[]
+  auditEvents              AuditEvent[]
+  confirmationWorkTimes    ConfirmationWorkTime[]
+  serverErrors             ServerError[]
+
+  @@index([organizationId])
+}
+
+model Membership {
+  id         String    @id @default(uuid()) @db.Uuid
+  practiceId String    @db.Uuid
+  userId     String    @db.Uuid
+  role       Role
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  revokedAt  DateTime? @db.Timestamptz(3)
+
+  practice Practice @relation(fields: [practiceId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@unique([id, practiceId])
+  @@unique([practiceId, userId])
+  @@index([userId])
+}
+
+// Only the SHA-256 of the token is stored; the link carries the token (D-38).
+model Invitation {
+  id                String    @id @default(uuid()) @db.Uuid
+  practiceId        String    @db.Uuid
+  email             String?
+  phone             String?
+  role              Role
+  // Required for PROFESSIONAL: the record the invited user takes over.
+  professionalId    String?   @db.Uuid
+  // The operator's invitation of the first admin (D-93): accepting it also makes the
+  // person an admin of the organization.
+  organizationAdmin Boolean   @default(false)
+  tokenHash         String    @unique
+  invitedByUserId   String?   @db.Uuid
+  expiresAt         DateTime  @db.Timestamptz(3)
+  acceptedAt        DateTime? @db.Timestamptz(3)
+  acceptedUserId    String?   @db.Uuid
+  revokedAt         DateTime? @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @db.Timestamptz(3)
+
+  practice     Practice      @relation(fields: [practiceId], references: [id])
+  professional Professional? @relation(fields: [professionalId, practiceId], references: [id, practiceId], onDelete: Restrict)
+
+  @@unique([id, practiceId])
+  @@index([practiceId])
+}
+
+// "Unidade" in the PRD.
+model Location {
+  id         String   @id @default(uuid()) @db.Uuid
+  practiceId String   @db.Uuid
+  name       String
+  address    String
+  timeZone   String   @default("America/Fortaleza")
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  practice           Practice               @relation(fields: [practiceId], references: [id])
+  professionals      ProfessionalLocation[]
+  workingHours       WorkingHours[]
+  scheduleExceptions ScheduleException[]
+  appointments       Appointment[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId])
+}
+
+model Professional {
+  id                        String   @id @default(uuid()) @db.Uuid
+  practiceId                String   @db.Uuid
+  name                      String
+  userId                    String?  @db.Uuid
+  googleConnectionId        String?  @db.Uuid
+  // All-day Google events block the agenda unless switched off (D-15).
+  allDayEventsBlock         Boolean  @default(true)
+  // Google calendars that count as busy (PRD 5, rule 1): until the professional
+  // chooses, every calendar they can write to except this practice's secondary (D-60).
+  googleBusyCalendarIds     String[] @default([])
+  googleBusyCalendarsChosen Boolean  @default(false)
+  active                    Boolean  @default(true)
+  createdAt                 DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt                 DateTime @updatedAt @db.Timestamptz(3)
+
+  practice           Practice                 @relation(fields: [practiceId], references: [id])
+  user               User?                    @relation(fields: [userId], references: [id])
+  googleConnection   GoogleConnection?        @relation(fields: [googleConnectionId], references: [id])
+  locations          ProfessionalLocation[]
+  workingHours       WorkingHours[]
+  exceptions         ScheduleException[]
+  timeBlocks         TimeBlock[]
+  prices             AppointmentTypePrice[]
+  appointments       Appointment[]
+  cadences           CadenceProfessional[]
+  whatsappInstance   WhatsappInstance?
+  secondaryCalendar  GoogleSecondaryCalendar?
+  googleLinkRequests GoogleLinkRequest[]
+  invitations        Invitation[]
+
+  @@unique([id, practiceId])
+  @@unique([practiceId, userId])
+  @@index([googleConnectionId])
+}
+
+model ProfessionalLocation {
+  id             String @id @default(uuid()) @db.Uuid
+  practiceId     String @db.Uuid
+  professionalId String @db.Uuid
+  locationId     String @db.Uuid
+
+  practice     Practice     @relation(fields: [practiceId], references: [id])
+  professional Professional @relation(fields: [professionalId, practiceId], references: [id, practiceId], onDelete: Cascade)
+  location     Location     @relation(fields: [locationId, practiceId], references: [id, practiceId], onDelete: Cascade)
+
+  @@unique([id, practiceId])
+  @@unique([professionalId, locationId])
+  @@index([practiceId])
+}
+
+// Weekly hours per professional, location and weekday (0 = Sunday). Several rows
+// on the same day express breaks.
+model WorkingHours {
+  id             String @id @default(uuid()) @db.Uuid
+  practiceId     String @db.Uuid
+  professionalId String @db.Uuid
+  locationId     String @db.Uuid
+  weekday        Int
+  startTime      String
+  endTime        String
+
+  practice     Practice     @relation(fields: [practiceId], references: [id])
+  professional Professional @relation(fields: [professionalId, practiceId], references: [id, practiceId], onDelete: Cascade)
+  location     Location     @relation(fields: [locationId, practiceId], references: [id, practiceId], onDelete: Cascade)
+
+  @@unique([id, practiceId])
+  @@index([practiceId, professionalId, weekday])
+}
+
+// Whole days off (holidays, vacations). Without a location, it applies to all.
+model ScheduleException {
+  id             String   @id @default(uuid()) @db.Uuid
+  practiceId     String   @db.Uuid
+  professionalId String   @db.Uuid
+  locationId     String?  @db.Uuid
+  startsOn       DateTime @db.Date
+  endsOn         DateTime @db.Date
+  reason         String
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  practice     Practice     @relation(fields: [practiceId], references: [id])
+  professional Professional @relation(fields: [professionalId, practiceId], references: [id, practiceId], onDelete: Cascade)
+  location     Location?    @relation(fields: [locationId, practiceId], references: [id, practiceId], onDelete: Restrict)
+
+  @@unique([id, practiceId])
+  @@index([practiceId, professionalId, startsOn])
+}
+
+// Manual blocks and blocks mirrored from Google ("Compromisso Google").
+model TimeBlock {
+  id                    String          @id @default(uuid()) @db.Uuid
+  practiceId            String          @db.Uuid
+  professionalId        String          @db.Uuid
+  startsAt              DateTime        @db.Timestamptz(3)
+  endsAt                DateTime        @db.Timestamptz(3)
+  allDay                Boolean         @default(false)
+  reason                String?
+  source                TimeBlockSource @default(MANUAL)
+  googleCalendarId      String?
+  googleEventId         String?
+  createdByUserId       String?         @db.Uuid
+  // A manual block goes to the secondary calendar as "Bloqueado" (D-85): the export
+  // runs while googleSyncRequestedAt is set. A removed block keeps deletedAt until
+  // its event is gone from Google, then the export deletes the row.
+  googleSyncRequestedAt DateTime?       @db.Timestamptz(3)
+  googleSyncAttempts    Int             @default(0)
+  googleSyncError       String?
+  deletedAt             DateTime?       @db.Timestamptz(3)
+  createdAt             DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime        @updatedAt @db.Timestamptz(3)
+
+  practice     Practice     @relation(fields: [practiceId], references: [id])
+  professional Professional @relation(fields: [professionalId, practiceId], references: [id, practiceId], onDelete: Cascade)
+
+  @@unique([id, practiceId])
+  @@unique([professionalId, googleCalendarId, googleEventId])
+  @@index([practiceId, professionalId, startsAt])
+  @@index([googleSyncRequestedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Patients and appointment types
+// ---------------------------------------------------------------------------
+
+// After an erasure request (D-28) name becomes "Paciente excluído", the other
+// personal fields are cleared and anonymizedAt is set.
+model Patient {
+  id                  String    @id @default(uuid()) @db.Uuid
+  practiceId          String    @db.Uuid
+  name                String
+  // E.164, unique per practice: the import deduplicates on it (D-18).
+  phone               String?
+  insurance           String?   @default("Particular")
+  notes               String?
+  // lower(unaccent(name)), kept by the patient_search_name trigger for the
+  // accent-insensitive search (D-45). Never written by the application.
+  searchName          String    @default("")
+  anonymizedAt        DateTime? @db.Timestamptz(3)
+  // Its contact in SynkronosCRM (D-68). The export runs while crmSyncRequestedAt is
+  // set; crmEraseRequestedAt asks it to take back what the agenda wrote there (D-28).
+  crmContactId        String?
+  crmSyncRequestedAt  DateTime? @db.Timestamptz(3)
+  crmSyncRetryAt      DateTime? @db.Timestamptz(3)
+  crmSyncAttempts     Int       @default(0)
+  crmSyncError        String?
+  crmEraseRequestedAt DateTime? @db.Timestamptz(3)
+  createdAt           DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime  @updatedAt @db.Timestamptz(3)
+
+  practice         Practice          @relation(fields: [practiceId], references: [id])
+  consents         ContactConsent[]
+  appointments     Appointment[]
+  crmInboundEvents CrmInboundEvent[]
+
+  @@unique([id, practiceId])
+  @@unique([practiceId, phone])
+  @@index([practiceId, name])
+  @@index([practiceId, searchName])
+  @@index([crmSyncRequestedAt])
+  @@index([crmEraseRequestedAt])
+}
+
+// Append-only consent log; the latest row per patient is the current state. A
+// trigger rejects UPDATE, DELETE and TRUNCATE (D-47); the patient is pseudonymized,
+// never deleted (D-28), so the log outlives an erasure.
+model ContactConsent {
+  id               String         @id @default(uuid()) @db.Uuid
+  practiceId       String         @db.Uuid
+  patientId        String         @db.Uuid
+  granted          Boolean
+  channel          ConsentChannel
+  recordedByUserId String?        @db.Uuid
+  recordedAt       DateTime       @default(now()) @db.Timestamptz(3)
+
+  practice Practice @relation(fields: [practiceId], references: [id])
+  patient  Patient  @relation(fields: [patientId, practiceId], references: [id, practiceId], onDelete: Restrict)
+
+  @@unique([id, practiceId])
+  @@index([practiceId, patientId, recordedAt])
+}
+
+model AppointmentType {
+  id                  String              @id @default(uuid()) @db.Uuid
+  practiceId          String              @db.Uuid
+  name                String
+  // Shown in Google and in the {tipo} variable; null means the category label (D-14).
+  displayName         String?
+  category            AppointmentCategory
+  durationMinutes     Int
+  defaultPriceCents   Int                 @default(0)
+  color               String
+  preparation         String?
+  cadenceId           String?             @db.Uuid
+  // Phase 3 (D-27).
+  allowsOnlineBooking Boolean             @default(false)
+  active              Boolean             @default(true)
+  createdAt           DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime            @updatedAt @db.Timestamptz(3)
+
+  practice     Practice               @relation(fields: [practiceId], references: [id])
+  cadence      Cadence?               @relation(fields: [cadenceId, practiceId], references: [id, practiceId], onDelete: Restrict)
+  prices       AppointmentTypePrice[]
+  appointments Appointment[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId])
+}
+
+// Price of a type for one professional, overriding defaultPriceCents.
+model AppointmentTypePrice {
+  id                String @id @default(uuid()) @db.Uuid
+  practiceId        String @db.Uuid
+  appointmentTypeId String @db.Uuid
+  professionalId    String @db.Uuid
+  priceCents        Int
+
+  practice        Practice        @relation(fields: [practiceId], references: [id])
+  appointmentType AppointmentType @relation(fields: [appointmentTypeId, practiceId], references: [id, practiceId], onDelete: Cascade)
+  professional    Professional    @relation(fields: [professionalId, practiceId], references: [id, practiceId], onDelete: Cascade)
+
+  @@unique([id, practiceId])
+  @@unique([appointmentTypeId, professionalId])
+}
+
+// ---------------------------------------------------------------------------
+// Appointments
+// ---------------------------------------------------------------------------
+
+model Appointment {
+  id                    String             @id @default(uuid()) @db.Uuid
+  practiceId            String             @db.Uuid
+  locationId            String             @db.Uuid
+  professionalId        String             @db.Uuid
+  patientId             String             @db.Uuid
+  appointmentTypeId     String             @db.Uuid
+  startsAt              DateTime           @db.Timestamptz(3)
+  endsAt                DateTime           @db.Timestamptz(3)
+  // Copied from the type when booking; editing the type never changes them (D-12).
+  durationMinutes       Int
+  priceCents            Int
+  status                AppointmentStatus  @default(SCHEDULED)
+  internalNote          String?
+  leadSource            LeadSource?
+  insurance             String?
+  // Imported appointments start with the cadence off (D-18).
+  cadenceEnabled        Boolean            @default(true)
+  // Rescheduling creates a new appointment pointing at the original (D-11).
+  rescheduledFromId     String?            @db.Uuid
+  // Its event in the professional's secondary calendar (D-62). The export runs
+  // while googleSyncRequestedAt is set; googleEventUpdatedAt is the event's
+  // "updated" after our last write, so our own change never reads as a Google edit.
+  googleEventId         String?
+  googleSyncRequestedAt DateTime?          @db.Timestamptz(3)
+  googleSyncedAt        DateTime?          @db.Timestamptz(3)
+  googleEventUpdatedAt  DateTime?          @db.Timestamptz(3)
+  googleSyncError       String?
+  googleSyncAttempts    Int                @default(0)
+  // Its note and status tag in SynkronosCRM (D-68). The export runs while
+  // crmSyncRequestedAt is set; crmSyncedStatus is the status the last note told, so
+  // a repeated export never writes the same note twice; crmNoteIds lets the erasure
+  // delete the notes (D-28).
+  crmSyncRequestedAt    DateTime?          @db.Timestamptz(3)
+  crmSyncRetryAt        DateTime?          @db.Timestamptz(3)
+  crmSyncAttempts       Int                @default(0)
+  crmSyncError          String?
+  crmSyncedAt           DateTime?          @db.Timestamptz(3)
+  crmSyncedStatus       AppointmentStatus?
+  crmNoteIds            String[]           @default([])
+  // A confirmation the professional's devices still have to hear about (PRD 7).
+  pushRequestedAt       DateTime?          @db.Timestamptz(3)
+  createdByUserId       String?            @db.Uuid
+  createdAt             DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime           @updatedAt @db.Timestamptz(3)
+
+  practice        Practice        @relation(fields: [practiceId], references: [id])
+  location        Location        @relation(fields: [locationId, practiceId], references: [id, practiceId], onDelete: Restrict)
+  professional    Professional    @relation(fields: [professionalId, practiceId], references: [id, practiceId], onDelete: Restrict)
+  patient         Patient         @relation(fields: [patientId, practiceId], references: [id, practiceId], onDelete: Restrict)
+  appointmentType AppointmentType @relation(fields: [appointmentTypeId, practiceId], references: [id, practiceId], onDelete: Restrict)
+  rescheduledFrom Appointment?    @relation("Reschedule", fields: [rescheduledFromId, practiceId], references: [id, practiceId], onDelete: Restrict)
+  rescheduledTo   Appointment[]   @relation("Reschedule")
+
+  statusChanges        AppointmentStatusChange[]
+  flags                AppointmentFlag[]
+  dispatches           Dispatch[]
+  pendingGoogleChanges PendingGoogleChange[]
+  crmInboundEvents     CrmInboundEvent[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId, startsAt])
+  @@index([practiceId, professionalId, startsAt])
+  @@index([practiceId, patientId])
+  @@index([googleSyncRequestedAt])
+  @@index([crmSyncRequestedAt])
+  @@index([pushRequestedAt])
+}
+
+model AppointmentStatusChange {
+  id              String             @id @default(uuid()) @db.Uuid
+  practiceId      String             @db.Uuid
+  appointmentId   String             @db.Uuid
+  fromStatus      AppointmentStatus?
+  toStatus        AppointmentStatus
+  source          StatusChangeSource
+  reason          String?
+  changedByUserId String?            @db.Uuid
+  changedAt       DateTime           @default(now()) @db.Timestamptz(3)
+
+  practice    Practice    @relation(fields: [practiceId], references: [id])
+  appointment Appointment @relation(fields: [appointmentId, practiceId], references: [id, practiceId], onDelete: Cascade)
+
+  @@unique([id, practiceId])
+  @@index([practiceId, appointmentId, changedAt])
+}
+
+// Pediu remarcação, Respondeu sem confirmar, Sem confirmação, contato manual.
+model AppointmentFlag {
+  id            String              @id @default(uuid()) @db.Uuid
+  practiceId    String              @db.Uuid
+  appointmentId String              @db.Uuid
+  type          AppointmentFlagType
+  createdAt     DateTime            @default(now()) @db.Timestamptz(3)
+  resolvedAt    DateTime?           @db.Timestamptz(3)
+
+  practice    Practice    @relation(fields: [practiceId], references: [id])
+  appointment Appointment @relation(fields: [appointmentId, practiceId], references: [id, practiceId], onDelete: Cascade)
+
+  @@unique([id, practiceId])
+  @@index([practiceId, type, resolvedAt])
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp cadences ("régua")
+// ---------------------------------------------------------------------------
+
+model Cadence {
+  id         String   @id @default(uuid()) @db.Uuid
+  practiceId String   @db.Uuid
+  name       String
+  version    Int      @default(1)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  practice         Practice              @relation(fields: [practiceId], references: [id])
+  steps            CadenceStep[]
+  appointmentTypes AppointmentType[]
+  // Empty means every professional of the practice.
+  professionals    CadenceProfessional[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId])
+}
+
+// When: anchor + offsetMinutes (negative = before), optionally moved to fixedTime
+// on that day. "D-1 às 18h" = APPOINTMENT, -1440, "18:00"; "H-3" = APPOINTMENT, -180.
+// Saving changed steps writes the rows of a new version; older versions stay for
+// the dispatch log and for the dispatches kept in the next 24 h (PRD 6, rule 7).
+model CadenceStep {
+  id               String              @id @default(uuid()) @db.Uuid
+  practiceId       String              @db.Uuid
+  cadenceId        String              @db.Uuid
+  cadenceVersion   Int                 @default(1)
+  position         Int
+  anchor           CadenceAnchor
+  offsetMinutes    Int                 @default(0)
+  fixedTime        String?
+  eligibleStatuses AppointmentStatus[]
+  // Confirmation stops only REQUEST_CONFIRMATION steps (D-06).
+  action           CadenceStepAction
+  template         String
+
+  practice   Practice   @relation(fields: [practiceId], references: [id])
+  cadence    Cadence    @relation(fields: [cadenceId, practiceId], references: [id, practiceId], onDelete: Cascade)
+  dispatches Dispatch[]
+
+  @@unique([id, practiceId])
+  @@unique([cadenceId, cadenceVersion, position])
+}
+
+model CadenceProfessional {
+  id             String @id @default(uuid()) @db.Uuid
+  practiceId     String @db.Uuid
+  cadenceId      String @db.Uuid
+  professionalId String @db.Uuid
+
+  practice     Practice     @relation(fields: [practiceId], references: [id])
+  cadence      Cadence      @relation(fields: [cadenceId, practiceId], references: [id, practiceId], onDelete: Cascade)
+  professional Professional @relation(fields: [professionalId, practiceId], references: [id, practiceId], onDelete: Cascade)
+
+  @@unique([id, practiceId])
+  @@unique([cadenceId, professionalId])
+}
+
+// One outgoing message, automatic (from a step) or manual, and the reply it got.
+// The text is rendered when it is sent. statusReason says why it failed, was
+// skipped or canceled; lockedUntil is the sender's lease (Block 5).
+model Dispatch {
+  id                 String         @id @default(uuid()) @db.Uuid
+  practiceId         String         @db.Uuid
+  appointmentId      String         @db.Uuid
+  cadenceStepId      String?        @db.Uuid
+  cadenceVersion     Int?
+  whatsappInstanceId String?        @db.Uuid
+  manual             Boolean        @default(false)
+  scheduledFor       DateTime       @db.Timestamptz(3)
+  sentAt             DateTime?      @db.Timestamptz(3)
+  status             DispatchStatus @default(SCHEDULED)
+  statusReason       String?
+  attempts           Int            @default(0)
+  lockedUntil        DateTime?      @db.Timestamptz(3)
+  messageText        String?
+  providerMessageId  String?
+  replyText          String?
+  repliedAt          DateTime?      @db.Timestamptz(3)
+  createdAt          DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime       @updatedAt @db.Timestamptz(3)
+
+  practice         Practice          @relation(fields: [practiceId], references: [id])
+  appointment      Appointment       @relation(fields: [appointmentId, practiceId], references: [id, practiceId], onDelete: Cascade)
+  cadenceStep      CadenceStep?      @relation(fields: [cadenceStepId, practiceId], references: [id, practiceId], onDelete: Restrict)
+  whatsappInstance WhatsappInstance? @relation(fields: [whatsappInstanceId, practiceId], references: [id, practiceId], onDelete: Restrict)
+  sandboxMessages  SandboxMessage[]
+
+  @@unique([id, practiceId])
+  @@index([status, scheduledFor])
+  @@index([practiceId, appointmentId])
+  @@index([whatsappInstanceId, providerMessageId])
+}
+
+// One WhatsAPI instance per professional per practice, connected by QR code.
+model WhatsappInstance {
+  id                 String                 @id @default(uuid()) @db.Uuid
+  practiceId         String                 @db.Uuid
+  professionalId     String                 @db.Uuid
+  providerInstanceId String
+  apiUrl             String
+  tokenEncrypted     String
+  phoneNumber        String?
+  status             WhatsappInstanceStatus @default(PENDING_QR)
+  statusChangedAt    DateTime               @default(now()) @db.Timestamptz(3)
+  createdAt          DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime               @updatedAt @db.Timestamptz(3)
+
+  practice        Practice         @relation(fields: [practiceId], references: [id])
+  professional    Professional     @relation(fields: [professionalId, practiceId], references: [id, practiceId], onDelete: Cascade)
+  dispatches      Dispatch[]
+  sandboxMessages SandboxMessage[]
+
+  @@unique([id, practiceId])
+  @@unique([professionalId, practiceId])
+}
+
+// What the sandbox messaging provider "sent" (Block 5), so the cadence runs end to
+// end without a real number. Never used in production. The data subject's erasure
+// clears the number and the text, as it does on the dispatch (D-49).
+model SandboxMessage {
+  id                 String   @id @default(uuid()) @db.Uuid
+  practiceId         String   @db.Uuid
+  whatsappInstanceId String   @db.Uuid
+  dispatchId         String?  @db.Uuid
+  toPhone            String?
+  text               String?
+  providerMessageId  String   @unique
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  practice         Practice         @relation(fields: [practiceId], references: [id])
+  whatsappInstance WhatsappInstance @relation(fields: [whatsappInstanceId, practiceId], references: [id, practiceId], onDelete: Cascade)
+  dispatch         Dispatch?        @relation(fields: [dispatchId, practiceId], references: [id, practiceId], onDelete: Cascade)
+
+  @@unique([id, practiceId])
+  @@index([practiceId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Google Calendar
+// ---------------------------------------------------------------------------
+
+// The calendar the system creates for one professional in one practice, named
+// after the practice. Output only: it never comes back as busy time (D-15).
+model GoogleSecondaryCalendar {
+  id                 String   @id @default(uuid()) @db.Uuid
+  practiceId         String   @db.Uuid
+  professionalId     String   @db.Uuid
+  googleConnectionId String   @db.Uuid
+  googleCalendarId   String
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  practice         Practice         @relation(fields: [practiceId], references: [id])
+  professional     Professional     @relation(fields: [professionalId, practiceId], references: [id, practiceId], onDelete: Cascade)
+  googleConnection GoogleConnection @relation(fields: [googleConnectionId], references: [id])
+
+  @@unique([id, practiceId])
+  @@unique([professionalId, practiceId])
+  @@unique([googleConnectionId, googleCalendarId])
+}
+
+// A change made in Google to an appointment, waiting for accept or revert (PRD 5, rule 3).
+model PendingGoogleChange {
+  id               String                         @id @default(uuid()) @db.Uuid
+  practiceId       String                         @db.Uuid
+  appointmentId    String                         @db.Uuid
+  kind             PendingGoogleChangeKind
+  proposedStartsAt DateTime?                      @db.Timestamptz(3)
+  proposedEndsAt   DateTime?                      @db.Timestamptz(3)
+  detectedAt       DateTime                       @default(now()) @db.Timestamptz(3)
+  resolvedAt       DateTime?                      @db.Timestamptz(3)
+  resolution       PendingGoogleChangeResolution?
+  resolvedByUserId String?                        @db.Uuid
+
+  practice    Practice    @relation(fields: [practiceId], references: [id])
+  appointment Appointment @relation(fields: [appointmentId, practiceId], references: [id, practiceId], onDelete: Cascade)
+
+  @@unique([id, practiceId])
+  @@index([practiceId, resolvedAt])
+  @@index([practiceId, appointmentId])
+}
+
+// A link a manager sends so the professional authorizes Google (PRD 5, Vínculo;
+// D-59). Only the SHA-256 of the token is stored, as in Invitation (D-38): valid
+// for 7 days, used once. The professional's own "Vincular" makes a short one.
+model GoogleLinkRequest {
+  id              String    @id @default(uuid()) @db.Uuid
+  practiceId      String    @db.Uuid
+  professionalId  String    @db.Uuid
+  tokenHash       String    @unique
+  sentToEmail     String?
+  createdByUserId String?   @db.Uuid
+  expiresAt       DateTime  @db.Timestamptz(3)
+  usedAt          DateTime? @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @db.Timestamptz(3)
+
+  practice     Practice     @relation(fields: [practiceId], references: [id])
+  professional Professional @relation(fields: [professionalId, practiceId], references: [id, practiceId], onDelete: Cascade)
+
+  @@unique([id, practiceId])
+  @@index([practiceId, professionalId])
+}
+
+// ---------------------------------------------------------------------------
+// SynkronosCRM (Block 7, D-66 to D-70)
+// ---------------------------------------------------------------------------
+
+// A practice's link to a FlwChat account. Several practices may share one account
+// (D-73), so what belongs to the account is in CrmAccount.
+model CrmConnection {
+  id                String    @id @default(uuid()) @db.Uuid
+  practiceId        String    @unique @db.Uuid
+  crmAccountId      String    @db.Uuid
+  connectedByUserId String?   @db.Uuid
+  reconciledAt      DateTime? @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @db.Timestamptz(3)
+
+  practice   Practice   @relation(fields: [practiceId], references: [id])
+  crmAccount CrmAccount @relation(fields: [crmAccountId], references: [id])
+
+  @@unique([id, practiceId])
+  @@index([crmAccountId])
+}
+
+// A secretary's command tag that reached the agenda, and what came of it (D-66).
+// Ids and codes only; the outcome's text is in src/lib/domain/labels.ts. FlwChat's
+// webhook has no event id, so deliveryKey is the SHA-256 of the event's type, date
+// and contact: a repeated delivery finds its row (D-67).
+model CrmInboundEvent {
+  id                String   @id @default(uuid()) @db.Uuid
+  practiceId        String   @db.Uuid
+  deliveryKey       String
+  origin            String
+  command           String
+  outcome           String
+  externalContactId String?
+  patientId         String?  @db.Uuid
+  appointmentId     String?  @db.Uuid
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+
+  practice    Practice     @relation(fields: [practiceId], references: [id])
+  patient     Patient?     @relation(fields: [patientId, practiceId], references: [id, practiceId], onDelete: Restrict)
+  appointment Appointment? @relation(fields: [appointmentId, practiceId], references: [id, practiceId], onDelete: Restrict)
+
+  @@unique([id, practiceId])
+  @@unique([practiceId, deliveryKey, command])
+  @@index([practiceId, createdAt])
+  @@index([practiceId, patientId])
+  @@index([practiceId, appointmentId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail
+// ---------------------------------------------------------------------------
+
+// Append-only: a database trigger rejects UPDATE, DELETE and TRUNCATE (D-31).
+// Stores ids and the names of changed fields, never personal values (D-28).
+// Minutes a user worked the "Sem confirmação" list, per local day (PRD 8, "Tempo da
+// secretária em confirmação"). The indicator shows only the practice's total.
+model ConfirmationWorkTime {
+  id         String   @id @default(uuid()) @db.Uuid
+  practiceId String   @db.Uuid
+  userId     String   @db.Uuid
+  date       DateTime @db.Date
+  minutes    Int      @default(0)
+  lastBeatAt DateTime @db.Timestamptz(3)
+
+  practice Practice @relation(fields: [practiceId], references: [id])
+
+  @@unique([id, practiceId])
+  @@unique([practiceId, userId, date])
+}
+
+// A server error of a practice's screen or job (D-101, PRD 7): where it happened and
+// which kind, never the message, which could carry a patient's data (D-28).
+model ServerError {
+  id         String   @id @default(uuid()) @db.Uuid
+  practiceId String   @db.Uuid
+  occurredAt DateTime @default(now()) @db.Timestamptz(3)
+  // render, route, action or job.
+  source     String
+  // The route's file path or the job's id, with no ids of anything.
+  route      String
+  errorName  String
+  digest     String?
+
+  practice Practice @relation(fields: [practiceId], references: [id])
+
+  @@unique([id, practiceId])
+  @@index([practiceId, occurredAt])
+}
+
+model AuditEvent {
+  id            String         @id @default(uuid()) @db.Uuid
+  practiceId    String         @db.Uuid
+  occurredAt    DateTime       @default(now()) @db.Timestamptz(3)
+  actorType     AuditActorType
+  actorUserId   String?        @db.Uuid
+  action        String
+  entityType    String
+  entityId      String?        @db.Uuid
+  changedFields String[]
+
+  practice Practice @relation(fields: [practiceId], references: [id])
+
+  @@unique([id, practiceId])
+  @@index([practiceId, occurredAt])
+  @@index([practiceId, entityType, entityId])
+}

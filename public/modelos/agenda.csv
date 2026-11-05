@@ -1,0 +1,4 @@
+﻿data;hora;profissional;unidade;tipo;paciente;celular;convenio;status;duracao;valor;observacao;origem
+15/12/2026;09:00;Dra. Exemplo;Unidade Centro;Primeira consulta;Maria Exemplo da Silva;(85) 90000-0001;Particular;Agendado;;;;
+16/12/2026;14:30;Dra. Exemplo;Unidade Centro;Retorno;João Exemplo Souza;85 90000-0002;Unimed;Confirmado;20;0;Trazer exames;Indicação
+10/10/2026;10:00;Dra. Exemplo;;Primeira consulta;Ana Exemplo Lima;85900000003;;Atendido;30;450,00;;Instagram
