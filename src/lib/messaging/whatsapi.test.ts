@@ -103,6 +103,17 @@ describe("WhatsapiProvider", () => {
     });
   });
 
+  it("adds our webhook on a new instance, whose webhook list comes back as a bare null", async () => {
+    const fake = server(200, null);
+    await client(fake).configureWebhook("https://agenda.test/api/webhooks/whatsapi/abc");
+    expect(fake.calls.map((call) => `${call.init.method} ${call.url}`)).toEqual(["GET https://free.uazapi.test/webhook", "POST https://free.uazapi.test/webhook"]);
+    expect(JSON.parse(String(fake.calls[1].init.body))).toMatchObject({ action: "add", url: "https://agenda.test/api/webhooks/whatsapi/abc" });
+  });
+
+  it("reads a bare null answer as an empty one", async () => {
+    expect(await client(server(200, null)).getConnection()).toBe("disconnected");
+  });
+
   it("updates our own webhook when the public URL changes", async () => {
     const fake = routes({ "GET /webhook": [{ id: "ours", enabled: true, url: "https://old-tunnel.test/api/webhooks/whatsapi/abc" }], "POST /webhook": {} });
     await client(fake).configureWebhook("https://new-tunnel.test/api/webhooks/whatsapi/abc");

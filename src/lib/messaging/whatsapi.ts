@@ -87,7 +87,8 @@ export class WhatsapiProvider implements MessagingProvider {
     } catch (error) {
       throw new MessagingError("transient", `WhatsAPI unreachable: ${(error as Error).message}`);
     }
-    const answer = (await response.json().catch(() => ({}))) as Json;
+    // A new instance answers its webhook list with a bare null: read it, like a body that is not JSON, as empty.
+    const answer = ((await response.json().catch(() => null)) ?? {}) as Json;
     if (response.ok) return answer;
 
     const code = typeof answer.code === "string" ? answer.code : "";
