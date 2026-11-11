@@ -86,6 +86,10 @@ test.describe("on a device that has not agreed to the notice yet", () => {
     await expect(page).toHaveURL(/\/login\?aviso=recusado$/);
     await expect(notice.getByText("Sem o aceite, não é possível entrar.")).toBeVisible();
     await expect(notice.getByRole("link", { name: "Não concordo" })).toHaveCount(0);
+    // The keyboard is back on the one answer left, which reads the message along with it.
+    const agree = notice.getByRole("button", { name: "Li e concordo" });
+    await expect(agree).toBeFocused();
+    await expect(agree).toHaveAccessibleDescription(/Sem o aceite, não é possível entrar/);
     expect(await agreed(page)).toBeUndefined();
 
     await notice.getByRole("button", { name: "Li e concordo" }).click();

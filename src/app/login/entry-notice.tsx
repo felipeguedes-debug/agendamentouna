@@ -42,7 +42,7 @@ export function EntryNotice({ next, declined }: { next: string | undefined; decl
         </div>
 
         {declined ? (
-          <p role="status" className="rounded-lg border bg-muted px-3 py-2 text-sm leading-6">
+          <p id="aviso-recusado" role="status" className="rounded-lg border bg-muted px-3 py-2 text-sm leading-6">
             Sem o aceite, não é possível entrar. Se tiver dúvidas, fale com o consultório que enviou o seu convite.
           </p>
         ) : null}
@@ -54,7 +54,16 @@ export function EntryNotice({ next, declined }: { next: string | undefined; decl
               <Link href={declineHref}>Não concordo</Link>
             </Button>
           )}
-          <Button type="submit" size="lg" className="px-4" autoFocus>
+          {/* A new key after "Não concordo" mounts the button again, and autoFocus brings the
+              keyboard back to it: the link that had the focus is gone. */}
+          <Button
+            key={declined ? "recusado" : "aviso"}
+            type="submit"
+            size="lg"
+            className="px-4"
+            autoFocus
+            aria-describedby={declined ? "aviso-recusado" : undefined}
+          >
             Li e concordo
           </Button>
         </form>

@@ -66,6 +66,10 @@ describe("the login page", () => {
     expect(html).toContain("consultório que enviou o seu convite");
     expect(html).toContain("Li e concordo");
     expect(html).not.toContain("Não concordo");
+    // The button that is left describes itself with the message, for a screen reader.
+    const describedBy = /<button[^>]*aria-describedby="([^"]+)"[^>]*>Li e concordo/.exec(html)?.[1];
+    expect(describedBy).toBeTruthy();
+    expect(html).toMatch(new RegExp(`id="${describedBy}"[^>]*>Sem o aceite`));
   });
 
   it("keeps the page asked for, in both answers", async () => {
