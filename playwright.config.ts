@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { defineConfig, devices } from "@playwright/test";
+import { AGREED_NOTICE } from "./e2e/notice";
 
 // End-to-end tests (D-46): a production build on its own port, against the test
 // database (agenda_test), which e2e/global-setup.ts rebuilds. `next dev` cannot run
@@ -24,6 +25,9 @@ export default defineConfig({
     locale: "pt-BR",
     timezoneId: "America/Fortaleza",
     trace: "retain-on-failure",
+    // Every flow starts on a device that already agreed to the notice before the login
+    // (D-106). e2e/publicas.spec.ts starts without it, to test the notice itself.
+    storageState: { cookies: [AGREED_NOTICE], origins: [] },
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {

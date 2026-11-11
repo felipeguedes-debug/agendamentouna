@@ -84,7 +84,7 @@ O admin da organização tem tudo o que o gestor tem, em todas as contas da orga
 
 1. Um usuário pode ter papéis diferentes em contas diferentes (secretária na conta A, gestora na conta B).
 2. Troca de conta sem logout, com seletor no topo e agenda multi-conta para quem tem permissão em mais de uma. A conta fica na URL, e a troca leva à mesma tela na outra conta quando o papel permite (D-39).
-3. Quem esqueceu a senha recebe por e-mail, pelo Gmail (D-90), um link que vale por 1 hora e uma vez; a resposta é a mesma exista ou não a conta, e a senha nova encerra as outras sessões (D-88). Convite por e-mail ou WhatsApp com link de ativação, válido por 7 dias e de uso único; primeiro acesso exige senha e aceite dos termos. O gestor convida secretárias; o admin da organização convida qualquer papel. O convite por WhatsApp entra com o Bloco 5 (D-38). A primeira organização, a conta e o convite do primeiro admin saem de um comando de operador, porque num banco vazio ninguém convida (D-93).
+3. Quem esqueceu a senha recebe por e-mail, pelo Gmail (D-90), um link que vale por 1 hora e uma vez; a resposta é a mesma exista ou não a conta, e a senha nova encerra as outras sessões (D-88). Convite por e-mail ou WhatsApp com link de ativação, válido por 7 dias e de uso único; primeiro acesso exige senha e aceite dos termos. Antes do login, um aviso pede, uma vez por aparelho, que a pessoa leia e concorde com os Termos de uso e a Política de privacidade; sem o aceite, não entra (D-106). O gestor convida secretárias; o admin da organização convida qualquer papel. O convite por WhatsApp entra com o Bloco 5 (D-38). A primeira organização, a conta e o convite do primeiro admin saem de um comando de operador, porque num banco vazio ninguém convida (D-93).
 4. Toda ação na agenda registra quem fez, quando e de qual conta (trilha de auditoria exposta ao gestor, com os nomes dos campos e nunca os valores, D-28, D-87).
 5. Desligar um usuário remove o acesso na hora e mantém o histórico das ações dele.
 6. Login com e-mail e senha e com Google. O login com Google pede só identidade (e-mail e perfil); o acesso ao Google Agenda é pedido num fluxo OAuth separado, no vínculo da seção 5 (D-01). Não há cadastro aberto: o Google só entra com e-mail que já recebeu convite (D-35).
@@ -355,7 +355,8 @@ Cinco telas principais têm mockup; os [mockups](https://claude.ai/artifact/5NFz
 | Log de disparos por agendamento | Passos, entrega e resposta, na aba Mensagens do agendamento (D-83) | 6 |
 | Indicadores | Indicadores da seção 8, por conta, para gestor e admin, com o consolidado da organização para o admin (D-26, D-74, D-75) | 8 |
 | Saúde da operação | Entrega de WhatsApp, motivos do que não saiu, instâncias, filas e falhas do Google e do CRM e erros por rota, para gestor e admin, com a tabela por conta para o admin (D-101) | 7 |
-| Página inicial e política de privacidade | Públicas, sem login, com texto provisório: a verificação do Google pede as duas (D-99) | 7 |
+| Página inicial e política de privacidade | Públicas, sem login, com texto provisório: a verificação do Google pede as duas (D-99). A página inicial fica em `/inicio`, o endereço informado ao Google, e `/` vai para o login (D-106) | 7 |
+| Aviso antes do login | Por cima do login, uma vez por aparelho: Li e concordo com os Termos de uso e a Política de privacidade, ou Não concordo, que não deixa entrar (D-106) | 3, 7 |
 
 ## 12. Construção no Claude Code
 

@@ -29,14 +29,22 @@ describe("proxy", () => {
     expect(location.searchParams.get("next")).toBe("/conta/abc/regua?semana=2");
   });
 
-  it("shows a visitor the public home page at /, which Google's verification opens without a login (D-99)", () => {
+  it("sends a visitor at / to the login, where the notice of the terms comes first (D-106)", () => {
     const response = proxy(request("/"));
-    expect(response.status).toBe(200);
-    expect(response.headers.get("location")).toBeNull();
-    expect(new URL(response.headers.get("x-middleware-rewrite")!).pathname).toBe("/inicio");
+    const location = new URL(response.headers.get("location")!);
+
+    expect(response.status).toBe(307);
+    expect(location.pathname).toBe("/login");
+    expect(location.search).toBe("");
   });
 
-  it("takes a request with a session cookie at / to the practices, not to the home page", () => {
+  it("keeps the home page public at /inicio, the address Google's verification opens without a login (D-99, D-106)", () => {
+    const response = proxy(request("/inicio"));
+    expect(passedThrough(response)).toBe(true);
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+  });
+
+  it("takes a request with a session cookie at / to the practices, not to the login", () => {
     const response = proxy(request("/", SESSION_COOKIE));
     expect(passedThrough(response)).toBe(true);
     expect(response.headers.get("x-middleware-rewrite")).toBeNull();
@@ -54,7 +62,7 @@ describe("proxy", () => {
 
   describe("the security policy (D-102)", () => {
     it("goes on the answer and to Next, which reads the nonce from it to mark its own scripts", () => {
-      for (const response of [proxy(request("/login")), proxy(request("/")), proxy(request("/conta/abc", SESSION_COOKIE))]) {
+      for (const response of [proxy(request("/login")), proxy(request("/inicio")), proxy(request("/conta/abc", SESSION_COOKIE))]) {
         const policy = policyOf(response);
         expect(policy).toMatch(/script-src 'self' 'nonce-[^']+' 'strict-dynamic'/);
         expect(policyForNext(response)).toBe(policy);

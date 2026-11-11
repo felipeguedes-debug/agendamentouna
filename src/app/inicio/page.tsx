@@ -4,7 +4,7 @@ import { buttonClass, linkClass } from "@/components/app-ui";
 
 export const metadata: Metadata = {
   title: { absolute: "Agenda: agenda de consultórios com Google Agenda e WhatsApp" },
-  alternates: { canonical: "/" },
+  alternates: { canonical: "/inicio" },
 };
 
 const POINTS = [
@@ -13,7 +13,11 @@ const POINTS = [
   { title: "Google Agenda de mão dupla", text: "Cada profissional vincula a própria conta. Os atendimentos vão para um calendário próprio, e os outros compromissos ocupam o horário sem que o conteúdo deles seja copiado." },
 ];
 
-/** The public home page at / (D-99), for visitors and for Google's verification of the app. Say what it does; nobody signs up here (D-38). */
+/**
+ * The public home page (D-99), for Google's verification of the app: its address there is
+ * /inicio, because / goes to the login with the notice of the terms (D-106). Say what it
+ * does; nobody signs up here (D-38).
+ */
 export default function HomePage() {
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center gap-10 px-4 py-12 sm:px-6">

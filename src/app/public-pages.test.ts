@@ -1,17 +1,19 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { PRIVACY_VERSION } from "@/lib/legal/privacy";
-import HomePage from "./inicio/page";
+import HomePage, { metadata as homeMetadata } from "./inicio/page";
 import PrivacyPage from "./privacidade/page";
 
 // The public pages that Google's verification asks for (D-99): a home page that says what
-// the app does, and a privacy policy on the same site. The text is provisional, like
-// /termos (D-38), and says so: nobody should take it for the final legal text.
+// the app does, and a privacy policy on the same site. The home page lives at /inicio, the
+// address given to Google, because / goes to the login with the notice of the terms (D-106).
+// The text is provisional, like /termos (D-38), and says so: nobody should take it for the
+// final legal text.
 
 const home = renderToStaticMarkup(HomePage());
 const privacy = renderToStaticMarkup(PrivacyPage());
 
-describe("the home page", () => {
+describe("the home page at /inicio", () => {
   it("says what the app is and that it uses Google Agenda and WhatsApp", () => {
     expect(home).toContain("Agenda");
     expect(home).toContain("Google Agenda");
@@ -20,6 +22,10 @@ describe("the home page", () => {
 
   it("links to the login, the privacy policy and the terms", () => {
     for (const path of ['href="/login"', 'href="/privacidade"', 'href="/termos"']) expect(home).toContain(path);
+  });
+
+  it("names /inicio as its own address", () => {
+    expect(homeMetadata.alternates?.canonical).toBe("/inicio");
   });
 
   it("offers no way to sign up: users come only from invitations (D-38)", () => {
@@ -57,8 +63,9 @@ describe("the privacy policy", () => {
     expect(privacy).toMatch(/canal de contato/i);
   });
 
-  it("links back to the home page and the terms", () => {
-    expect(privacy).toContain('href="/"');
+  it("links back to the home page at /inicio, not to / that goes to the login (D-106), and to the terms", () => {
+    expect(privacy).toContain('href="/inicio"');
+    expect(privacy).not.toContain('href="/"');
     expect(privacy).toContain('href="/termos"');
   });
 });

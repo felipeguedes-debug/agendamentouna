@@ -58,6 +58,11 @@ export function AccessScreen({ title, subtitle, children }: { title: string; sub
         </div>
         {children}
         <p className="text-xs text-muted-foreground">
+          {/* The home page that Google's verification opens: / goes to the login (D-99, D-106). */}
+          <Link href="/inicio" className="hover:underline">
+            Sobre
+          </Link>
+          {" · "}
           <Link href="/privacidade" className="hover:underline">
             Privacidade
           </Link>

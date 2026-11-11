@@ -129,6 +129,7 @@ D-01 a D-25 correspondem, na mesma ordem, aos pontos da revisão do PRD. D-26 e 
 | D-103 | Backup de 7 dias no piloto | Decidida |
 | D-104 | Repositório público | Decidida |
 | D-105 | Check numa sessão na nuvem | Decidida |
+| D-106 | Aviso dos termos antes do login | Decidida; texto provisório |
 
 ### D-01 · Login com Google separado do vínculo da agenda
 
@@ -1337,7 +1338,7 @@ Decisões tomadas para deixar o código publicável na Vercel com Supabase. Nada
 
 ### D-99 · Página inicial e política de privacidade
 
-- **Status:** Decidida em 03/11/2026. **Texto provisório**, como `/termos` (D-38): o texto jurídico e o canal de contato ainda não existem, e a verificação do Google vai pedir esse contato.
+- **Status:** Decidida em 03/11/2026. **Texto provisório**, como `/termos` (D-38): o texto jurídico e o canal de contato ainda não existem, e a verificação do Google vai pedir esse contato. O endereço mudou na D-106: `/` vai para o login, com o aviso dos termos, e a página inicial fica em `/inicio`.
 - **Decisão:**
   - `/` sem cookie de sessão mostra a página inicial, por rewrite no `proxy.ts` para `/inicio`, e não mais o login: a verificação abre o endereço sem login. Com cookie, segue para a escolha de conta, como antes. Sem cadastro aberto (D-38).
   - `/privacidade` descreve o que o sistema faz, como o PRD e as decisões dizem: dados tratados, base legal (D-19), o uso dos dados do Google, com a frase de Uso Limitado que a política do Google pede, operadores e direitos do titular (D-49). Não inventa contato, encarregado nem posição jurídica nova.
@@ -1460,3 +1461,20 @@ Decisões tomadas para deixar o código publicável na Vercel com Supabase. Nada
   - O Setup script numa sessão nova do ambiente `agendamentouna`.
   - O e2e e o `bench:search` na nuvem.
 - **No PRD:** seção 12 (Práticas que aceleram).
+
+### D-106 · Aviso dos termos antes do login
+
+- **Status:** Decidida em 11/11/2026, por Felipe Guedes, entre as opções levadas a ele. Nos três pontos, a escolha foi a proposta. **Texto provisório**, como os termos (D-38) e a política (D-99).
+- **Pedido:** a página inicial virar um aviso antes do login, mais enxuto, só com botões de concordar.
+- **Decisão:**
+  - **`/` sem sessão vai para `/login`** (307, sem `?next=`), como antes da D-99. Com sessão, segue para a escolha de conta.
+  - **O aviso fica por cima do login** (`src/app/login/entry-notice.tsx`): "Antes de entrar", o pedido de ler e concordar com os Termos de uso e a Política de privacidade, com o link de cada um, a nota de que os dois textos ainda são provisórios e os botões **Li e concordo** e **Não concordo**. O login fica `inert` atrás dele até a resposta.
+  - **"Concordo", não "autorizo".** A agenda se apoia na execução de contrato (D-19). Aceitar os termos e dizer que leu a política não é consentir com o tratamento, e um consentimento posto como condição para entrar pode não valer pela LGPD, que pede consentimento livre. O consentimento continua só onde já estava: o do paciente para o WhatsApp (D-47).
+  - **Não concordo** fica na URL (`?aviso=recusado`, como os painéis da D-83). O aviso diz que sem o aceite não é possível entrar e que a pessoa deve falar com o consultório que enviou o convite. O login continua fechado, nada é guardado e "Li e concordo" continua ali.
+  - **Uma vez por aparelho.** "Li e concordo" grava o cookie `agenda.aviso_aceito` com `TERMS_VERSION` e `PRIVACY_VERSION`, por um ano, `httpOnly` e `SameSite=Lax` (`src/lib/legal/notice.ts`, `src/app/login/actions.ts`). Versão nova de um dos dois traz o aviso de volta. O servidor lê o cookie, e o login não aparece antes do aviso.
+  - **Nada vai para o banco.** Antes do login ninguém é conhecido. O aceite de cada pessoa continua sendo o do convite (`User.termsAcceptedAt` e `termsVersion`, D-38), que não guarda a versão da política. Gravar também no usuário, depois do login, foi a opção não escolhida: pedia mudança no banco.
+  - **Sem script próprio.** Um formulário com Server Action e um link, renderizados no servidor: funciona antes de o React carregar e não dá nada à CSP para recusar (D-102). Um Dialog do Radix só aparece no navegador, depois de carregar.
+  - **`/inicio` continua público** e é o endereço da página inicial na tela de consentimento do Google. A página de verificação do Google, conferida em 11/11/2026, pede uma página inicial visível sem login, no domínio verificado, estática e com link para a política, e aceita um caminho dentro do domínio (o exemplo dela é `/about`). O login com o aviso por cima não serviria. O login ganha o link "Sobre" para ela, e "← Agenda", na política, volta para ela.
+- **Testes:** `src/lib/legal/notice.test.ts`, `src/app/login/page.test.ts`, `src/app/login/actions.test.ts`, `src/proxy.test.ts` e `src/app/public-pages.test.ts`. No build de produção, `e2e/publicas.spec.ts` (aparelho novo, recusar, aceitar, voltar sem aviso e manter a página pedida) e `e2e/status.spec.ts` (307 em `/`, 200 em `/inicio`). Os outros fluxos do e2e começam com o aviso aceito (`e2e/notice.ts`, em `playwright.config.ts`), e quem limpa os cookies para trocar de pessoa o devolve, como o mesmo aparelho guardaria.
+- **Não conferido:** se o Google aceita `/inicio` como página inicial, o que só a verificação diz; o aviso num celular real e na PWA instalada. No Chromium, o `/pwa` sem sessão passa pelo login com o aviso e volta ao `/pwa` depois.
+- **No PRD:** seção 3 (requisito 3), seção 11.

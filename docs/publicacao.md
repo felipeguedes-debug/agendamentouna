@@ -113,7 +113,7 @@ A Vercel define sozinha `VERCEL_ENV`, `VERCEL_URL`, `VERCEL_BRANCH_URL` e `VERCE
     O comando mostra o host do banco antes de agir. Apague `.env.producao` ao terminar. Se o convite vencer em 7 dias, use `--reconvidar`.
 13. **Primeiro acesso.** O admin aceita o convite e ativa o 2FA em Segurança. Depois cadastra tipos, profissionais e usuários.
 14. **WhatsApp.** Comece por um número de teste. Conecte no painel da WhatsAPI pelo QR Code, registre na tela do profissional e confira o webhook com uma resposta "1". Só depois os números reais. O WhatsApp permite quatro aparelhos conectados, e cada número usa dois (D-05).
-15. **Google, verificação.** Com o site no ar, informe a página inicial e `/privacidade` na tela de consentimento e peça a verificação (D-24). A verificação vai pedir um contato, que ainda não existe (D-99).
+15. **Google, verificação.** Com o site no ar, informe `/inicio` como página inicial e `/privacidade` como política na tela de consentimento e peça a verificação (D-24). Não informe `/`: ele vai para o login (D-106). A verificação vai pedir um contato, que ainda não existe (D-99).
 16. **Monitor.** Aponte um monitor externo para `/api/health`.
 
 ## O que conferir na primeira publicação
@@ -128,8 +128,8 @@ Nada disto dá para testar sem ambiente real. Se um item falhar, pare antes dos 
 | Data API fechada | `curl https://<ref>.supabase.co/rest/v1/Patient -H "apikey: <chave pública>"` | Recusa, nunca uma lista |
 | Limite de login | 4 senhas erradas em 10 s, e `select key from "RateLimit"` | A 4ª dá "Muitas tentativas". A chave traz um endereço, e nunca `no-trusted-ip`, que seria um balde dividido por todos (D-96) |
 | Status HTTP | Tela sem permissão, conta sem acesso e `/` com sessão | 403, 404 e 307 (D-72; `e2e/status.spec.ts` mostra os casos) |
-| Cabeçalhos | `curl -I` em `/login` e `/` | Os de `e2e/publicas.spec.ts` |
-| Página sem sessão | `/` numa janela anônima | 200, com a página inicial e sem redirecionar |
+| Cabeçalhos | `curl -I` em `/login` e `/inicio` | Os de `e2e/publicas.spec.ts` |
+| Página sem sessão | `/` e `/inicio` numa janela anônima | `/` leva ao login com o aviso dos termos; depois de Li e concordo, o aviso não volta nesse navegador. `/inicio` responde 200, sem redirecionar (D-106) |
 | Preview | Num preview, marque um agendamento com paciente fictício | A mensagem fica no sandbox, nenhuma sai |
 | Login no preview | Entre pelo endereço do ramo e pelo do deploy | Os dois aceitam (D-95) |
 | Inngest | Painel do Inngest | 13 funções sincronizadas, `minute-tick` a cada minuto e a contagem batendo com a D-100: cerca de 1.443 execuções por dia com o sistema parado. Enquanto estiver no plano gratuito, confira o uso toda semana |

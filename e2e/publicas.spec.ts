@@ -1,9 +1,11 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { ENTRY_NOTICE_COOKIE } from "../src/lib/legal/notice";
 import { E2E_PASSWORD, MANAGER_EMAIL } from "./data";
 
-// The public pages (D-99) and the security headers (D-102), on the production build. A
-// page rendered ahead of time would have scripts without the nonce, and only a browser
-// shows that: the page opens, nothing reacts, and the console has the refusal.
+// The public pages (D-99), the notice before the login (D-106) and the security headers
+// (D-102), on the production build. A page rendered ahead of time would have scripts
+// without the nonce, and only a browser shows that: the page opens, nothing reacts, and
+// the console has the refusal.
 
 const shown = (locator: Locator) => locator.filter({ visible: true });
 
@@ -36,11 +38,11 @@ function collectViolations(page: Page) {
   return violations;
 }
 
-test("a visitor sees the home page at the site's address, with no login in the way", async ({ page }) => {
+test("the home page that Google opens answers at /inicio, without a login, and leads to the policy and to the login (D-99, D-106)", async ({ page }) => {
   const violations = collectViolations(page);
-  const home = await page.goto("/");
+  const home = await page.goto("/inicio");
   expect(home?.status()).toBe(200);
-  expect(new URL(page.url()).pathname).toBe("/");
+  expect(new URL(page.url()).pathname).toBe("/inicio");
   await expect(page.getByRole("heading", { level: 1 })).toContainText("WhatsApp e Google Agenda");
 
   await page.getByRole("link", { name: "Política de privacidade" }).click();
@@ -48,22 +50,79 @@ test("a visitor sees the home page at the site's address, with no login in the w
   await expect(page.getByRole("heading", { name: "Política de privacidade" })).toBeVisible();
   await expect(page.getByText("Texto provisório")).toBeVisible();
   await expect(page.getByText("Uso Limitado")).toBeVisible();
+  await page.getByRole("link", { name: "← Agenda" }).click();
+  await expect(page).toHaveURL(/\/inicio$/);
 
-  await page.goto("/");
   await page.getByRole("link", { name: "Entrar" }).click();
   await expect(page).toHaveURL(/\/login$/);
   expect(violations).toEqual([]);
 });
 
-test("the login and the terms link to the policy", async ({ page }) => {
+test.describe("on a device that has not agreed to the notice yet", () => {
+  // The other flows start with the notice agreed (playwright.config.ts).
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  const agreed = async (page: Page) => (await page.context().cookies()).find((cookie) => cookie.name === ENTRY_NOTICE_COOKIE);
+
+  test("the site's address opens the login under the notice, and agreeing once is enough on that device (D-106)", async ({ page }) => {
+    const violations = collectViolations(page);
+    const start = await page.request.get("/", { maxRedirects: 0 });
+    expect(start.status()).toBe(307);
+    expect(start.headers().location).toBe("/login");
+
+    const answer = await page.goto("/");
+    expect(answer?.status()).toBe(200);
+    await expect(page).toHaveURL(/\/login$/);
+    const notice = page.getByRole("dialog", { name: "Antes de entrar" });
+    await expect(notice).toBeVisible();
+    await expect(notice.getByText("Os dois textos ainda são provisórios")).toBeVisible();
+    await expect(notice.getByRole("link", { name: "Termos de uso" })).toHaveAttribute("href", "/termos");
+    await expect(notice.getByRole("link", { name: "Política de privacidade" })).toHaveAttribute("href", "/privacidade");
+    await expect(notice.getByRole("button", { name: "Li e concordo" })).toBeFocused();
+    // The login behind it takes no input until the answer.
+    await expect(page.locator("[inert] #email")).toHaveCount(1);
+
+    await notice.getByRole("link", { name: "Não concordo" }).click();
+    await expect(page).toHaveURL(/\/login\?aviso=recusado$/);
+    await expect(notice.getByText("Sem o aceite, não é possível entrar.")).toBeVisible();
+    await expect(notice.getByRole("link", { name: "Não concordo" })).toHaveCount(0);
+    expect(await agreed(page)).toBeUndefined();
+
+    await notice.getByRole("button", { name: "Li e concordo" }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator("[inert]")).toHaveCount(0);
+    await shown(page.getByLabel("E-mail")).fill("ninguem@example.com");
+    // Out of reach of the page's scripts, for a year.
+    expect(await agreed(page)).toMatchObject({ httpOnly: true, sameSite: "Lax", path: "/" });
+
+    // Once per device: the next visit goes straight to the login.
+    await page.goto("/");
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(violations).toEqual([]);
+  });
+
+  test("the page asked for before the notice is where the login goes after it", async ({ page }) => {
+    await page.goto("/pwa");
+    await expect(page).toHaveURL(/\/login\?next=%2Fpwa$/);
+    await page.getByRole("dialog", { name: "Antes de entrar" }).getByRole("button", { name: "Li e concordo" }).click();
+    await expect(page).toHaveURL(/\/login\?next=%2Fpwa$/);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  });
+});
+
+test("the login links to the home page, the policy and the terms", async ({ page }) => {
   await page.goto("/login");
+  await expect(page.getByRole("link", { name: "Sobre" })).toHaveAttribute("href", "/inicio");
   await expect(page.getByRole("link", { name: "Privacidade" })).toHaveAttribute("href", "/privacidade");
+  await expect(page.getByRole("link", { name: "Termos", exact: true })).toHaveAttribute("href", "/termos");
   expect((await page.request.get("/privacidade")).status()).toBe(200);
   expect((await page.request.get("/termos")).status()).toBe(200);
 });
 
 test("every page carries the security headers, and the policy has a new nonce each time", async ({ request }) => {
-  for (const path of ["/", "/inicio", "/privacidade", "/termos", "/login", "/esqueci-senha"]) {
+  for (const path of ["/inicio", "/privacidade", "/termos", "/login", "/esqueci-senha"]) {
     const answer = await request.get(path);
     expect(answer.status(), path).toBe(200);
     const headers = answer.headers();

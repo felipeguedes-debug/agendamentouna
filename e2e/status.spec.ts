@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { E2E_PASSWORD, GOOGLE_SECRETARY_EMAIL, MANAGER_EMAIL, SECRETARY_EMAIL } from "./data";
+import { AGREED_NOTICE } from "./notice";
 
 // D-39, D-40 and D-72: the HTTP status of a denied page. Only a production build shows
 // it (next dev has no prerendered shell), and a shell from Next or a <Suspense> or
@@ -25,6 +26,12 @@ async function signIn(page: Page, email: string) {
   }
 }
 
+/** Another person on the same device: the session goes, the notice agreed before the login stays (D-106). */
+async function signOut(page: Page) {
+  await page.context().clearCookies();
+  await page.context().addCookies([AGREED_NOTICE]);
+}
+
 test("a screen the role does not allow answers 403 and one it allows answers 200", async ({ page }) => {
   const practicePath = await signIn(page, SECRETARY_EMAIL);
 
@@ -37,7 +44,7 @@ test("a screen the role does not allow answers 403 and one it allows answers 200
     await expect(page.getByRole("heading", { name: "Sem permissão" })).toBeVisible();
   }
 
-  await page.context().clearCookies();
+  await signOut(page);
   await signIn(page, MANAGER_EMAIL);
   for (const screen of ["regua", "integracoes", "usuarios", "unidades", "unidades/horarios", "saude", "auditoria"]) {
     const allowed = await page.goto(`${practicePath}/${screen}`);
@@ -49,7 +56,7 @@ test("a screen the role does not allow answers 403 and one it allows answers 200
 test("a practice without access answers 404, the same as one that does not exist", async ({ page }) => {
   // A real practice of the same organization, which the first secretary cannot enter.
   const otherPractice = await signIn(page, GOOGLE_SECRETARY_EMAIL);
-  await page.context().clearCookies();
+  await signOut(page);
   const practicePath = await signIn(page, SECRETARY_EMAIL);
   expect(otherPractice).not.toBe(practicePath);
 
@@ -85,4 +92,11 @@ test("the redirects of the session check answer 307", async ({ page, request }) 
   const anonymous = await request.get(practicePath, { maxRedirects: 0 });
   expect(anonymous.status()).toBe(307);
   expect(anonymous.headers().location).toBe(`/login?next=${encodeURIComponent(practicePath)}`);
+
+  // A visitor at the site's address goes to the login, with nothing to come back to; the
+  // public home page answers at /inicio (D-99, D-106).
+  const visitor = await request.get("/", { maxRedirects: 0 });
+  expect(visitor.status()).toBe(307);
+  expect(visitor.headers().location).toBe("/login");
+  expect((await request.get("/inicio", { maxRedirects: 0 })).status()).toBe(200);
 });

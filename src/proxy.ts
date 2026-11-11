@@ -32,9 +32,9 @@ export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   const hasSession = Boolean(getSessionCookie(request));
 
-  // A visitor sees the public home page at the site's own address (D-99); someone with a
+  // A visitor at / goes to the login, where the notice of the terms comes first; the public
+  // home page that Google's verification opens is /inicio (D-99, D-106). Someone with a
   // session goes on to the page that picks their practice.
-  if (pathname === "/" && !hasSession) return withPolicy(request, (init) => NextResponse.rewrite(new URL("/inicio", request.url), init));
   if (isPublic(pathname) || hasSession) return withPolicy(request, (init) => NextResponse.next(init));
 
   const login = new URL("/login", request.url);
